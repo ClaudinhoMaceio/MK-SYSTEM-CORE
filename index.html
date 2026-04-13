@@ -21,6 +21,7 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Rajdhani:wght@300;500;700&display=swap" rel="stylesheet">
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <style>
         :root {
             --neon-gold: #c5a02e;
@@ -36,6 +37,9 @@
             min-height: 100vh;
             -webkit-tap-highlight-color: transparent;
         }
+        @supports (min-height: 100dvh) {
+            body { min-height: 100dvh; }
+        }
         #canvas-3d {
             position: fixed;
             top: 0; left: 0; width: 100%; height: 100%;
@@ -45,12 +49,43 @@
         .gold-glow { text-shadow: 0 0 15px rgba(197, 160, 46, 0.6); }
         .glass { background: var(--card-bg); backdrop-filter: blur(15px); border: 1px solid rgba(197, 160, 46, 0.2); }
         
-        .calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
-        .calendar-day {
-            aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
-            font-size: 11px; background: rgba(255,255,255,0.03); border-radius: 6px;
+        .calendar-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+        .calendar-weekday {
+            font-size: 10px; text-align: center; color: #6b7280; text-transform: uppercase;
+            letter-spacing: 0.08em; font-weight: 700;
         }
-        .day-active { background: var(--neon-gold); color: black; font-weight: bold; box-shadow: 0 0 15px var(--neon-gold); }
+        .calendar-day {
+            min-height: 46px; display: flex; flex-direction: column; align-items: center; justify-content: center;
+            font-size: 11px; background: rgba(255,255,255,0.03); border-radius: 10px; border: 1px solid rgba(255,255,255,0.06);
+            cursor: pointer; transition: all .2s ease;
+        }
+        .calendar-day:hover { border-color: rgba(197, 160, 46, 0.45); transform: translateY(-1px); }
+        .calendar-day-empty { background: transparent; border: none; cursor: default; }
+        .calendar-day-empty:hover { transform: none; }
+        .day-active { background: rgba(197, 160, 46, 0.15); color: #f5d97d; font-weight: bold; box-shadow: inset 0 0 0 1px rgba(197,160,46,.5); }
+        .day-completed { background: rgba(59, 130, 246, 0.14); color: #bfdbfe; box-shadow: inset 0 0 0 1px rgba(59,130,246,.45); }
+        .day-cancelled { background: rgba(239, 68, 68, 0.12); color: #fecaca; box-shadow: inset 0 0 0 1px rgba(239,68,68,.4); }
+        .day-selected { background: var(--neon-gold); color: #111; font-weight: 800; box-shadow: 0 0 18px rgba(197,160,46,.55); border-color: rgba(197,160,46,0.9); }
+        .day-today { outline: 1px dashed rgba(96, 165, 250, .7); outline-offset: -3px; }
+        .event-dot {
+            width: 5px; height: 5px; border-radius: 999px; background: var(--neon-gold);
+            margin-top: 4px; box-shadow: 0 0 8px rgba(197,160,46,.8);
+        }
+        .event-dot-completed { background: #60a5fa; box-shadow: 0 0 8px rgba(96,165,250,.8); }
+        .event-dot-cancelled { background: #f87171; box-shadow: 0 0 8px rgba(248,113,113,.8); }
+        .event-priority-badge {
+            margin-top: 4px; padding: 1px 5px; border-radius: 999px; font-size: 9px;
+            font-weight: 700; letter-spacing: .03em; text-transform: uppercase;
+        }
+        .badge-today { background: rgba(34, 197, 94, .20); color: #86efac; }
+        .badge-tomorrow { background: rgba(245, 158, 11, .20); color: #fcd34d; }
+        .badge-overdue { background: rgba(239, 68, 68, .20); color: #fca5a5; }
+        .badge-completed { background: rgba(59, 130, 246, .20); color: #93c5fd; }
+        .badge-canceled { background: rgba(248, 113, 113, .20); color: #fca5a5; }
+        .corporate-card {
+            background: linear-gradient(160deg, rgba(197,160,46,0.10), rgba(0,0,0,0.15));
+            border: 1px solid rgba(197,160,46,0.22);
+        }
 
         #edit-panel {
             position: fixed; right: -400px; top: 0; width: 380px; height: 100vh;
@@ -78,6 +113,18 @@
 
         /* Ajuste para Notch do iPhone */
         header { padding-top: env(safe-area-inset-top); }
+
+        @media (max-width: 768px) {
+            #edit-panel {
+                width: 100vw;
+                right: -100vw;
+                padding: 20px;
+            }
+            .calendar-grid { gap: 4px; }
+            .calendar-day { min-height: 40px; font-size: 12px; }
+            .calendar-weekday { font-size: 9px; }
+            .event-priority-badge { font-size: 8px; padding: 1px 4px; }
+        }
     </style>
 </head>
 <body>
@@ -109,6 +156,13 @@
                 <p id="view-id" class="text-[9px] text-gray-600 mb-1 text-right">ID: #000</p>
                 <h3 id="view-client" class="text-xl font-bold text-white mb-1">Nome do Cliente</h3>
                 <p id="view-date" class="text-[#c5a02e] text-xs uppercase tracking-widest">00/00/0000</p>
+                <div class="mt-4 space-y-1 text-[11px] text-gray-300">
+                    <p><span class="text-gray-500">Hora:</span> <span id="view-time">--:--</span></p>
+                    <p><span class="text-gray-500">Serviço:</span> <span id="view-service">Não informado</span></p>
+                    <p><span class="text-gray-500">Telefone:</span> <span id="view-phone">Não informado</span></p>
+                    <p><span class="text-gray-500">Documento:</span> <span id="view-doc">Não informado</span></p>
+                    <p><span class="text-gray-500">Endereço:</span> <span id="view-address">Não informado</span></p>
+                </div>
             </div>
             <div>
                 <label class="text-[10px] uppercase text-gray-500 block mb-2 font-bold italic">Valor do Contrato (R$)</label>
@@ -120,11 +174,25 @@
                     <option value="confirmado">Confirmado</option>
                     <option value="pendente">Pendente</option>
                     <option value="concluido">Arquivado / Concluído</option>
+                    <option value="cancelado">Cancelado</option>
                 </select>
+            </div>
+            <div class="p-3 rounded-lg bg-black/30 border border-white/10 text-[11px]">
+                <p class="text-gray-500 uppercase tracking-widest text-[10px] mb-1">Financeiro do Evento</p>
+                <p id="view-financial-state" class="text-white">Contabilizado no financeiro</p>
             </div>
             <div class="pt-10">
                 <button id="btn-save-changes" onclick="saveChanges()" class="w-full bg-[#c5a02e] text-black font-bold p-4 rounded-lg uppercase text-xs tracking-[0.3em] hover:brightness-110 active:scale-95 transition-all shadow-[0_0_20px_rgba(197,160,46,0.3)]">
                     Salvar Alterações
+                </button>
+                <button id="btn-toggle-financial" onclick="toggleFinancialReversal()" class="w-full mt-3 bg-black/40 border border-blue-400/40 text-blue-300 font-bold p-4 rounded-lg uppercase text-[11px] tracking-[0.2em] hover:bg-blue-500/10 transition-all">
+                    Estornar no Financeiro
+                </button>
+                <button id="btn-download-contract" onclick="downloadContract()" class="w-full mt-3 bg-white/5 border border-[#c5a02e]/30 text-[#c5a02e] font-bold p-4 rounded-lg uppercase text-[11px] tracking-[0.2em] hover:bg-[#c5a02e]/10 transition-all">
+                    Download do Contrato
+                </button>
+                <button id="btn-delete-event" onclick="deleteEvent()" class="w-full mt-3 bg-red-600/20 border border-red-500/50 text-red-300 font-bold p-4 rounded-lg uppercase text-[11px] tracking-[0.2em] hover:bg-red-600/30 transition-all">
+                    Excluir Evento Definitivamente
                 </button>
             </div>
         </div>
@@ -147,7 +215,18 @@
             </button>
         </header>
 
-        <!-- FINANCEIRO -->
+        <div class="glass p-3 rounded-2xl border border-white/10 mb-10">
+            <div class="flex flex-wrap gap-2">
+                <button id="main-tab-operacional" onclick="setMainTab('operacional')" class="px-5 py-2 rounded-xl text-[11px] uppercase tracking-widest font-bold bg-[#c5a02e] text-black">
+                    Gestão de Eventos
+                </button>
+                <button id="main-tab-financeiro" onclick="setMainTab('financeiro')" class="px-5 py-2 rounded-xl text-[11px] uppercase tracking-widest font-bold text-gray-300 bg-black/40 border border-white/10">
+                    Financeiro
+                </button>
+            </div>
+        </div>
+
+        <div id="section-operacional">
         <div class="grid grid-cols-1 md:grid-cols-4 gap-6 mb-12">
             <div class="glass p-6 rounded-2xl border-l-4 border-[#c5a02e]">
                 <p class="text-gray-500 text-[10px] uppercase mb-2 italic">Receita Bruta Total</p>
@@ -169,11 +248,27 @@
 
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-10">
             <div class="lg:col-span-4 space-y-8">
-                <div class="glass p-8 rounded-3xl">
-                    <h2 class="futuristic-font text-sm text-[#c5a02e] mb-6 flex items-center gap-3 italic">AGENDA OPERACIONAL</h2>
+                <div class="glass p-7 rounded-3xl corporate-card">
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="futuristic-font text-sm text-[#c5a02e] flex items-center gap-3 italic">AGENDA OPERACIONAL</h2>
+                        <div class="flex items-center gap-2">
+                            <button onclick="changeCalendarMonth(-1)" class="w-8 h-8 rounded-lg bg-black/40 border border-white/10 hover:border-[#c5a02e]/50 text-[#c5a02e]">‹</button>
+                            <button onclick="goToCurrentMonth()" class="px-3 h-8 rounded-lg bg-black/40 border border-white/10 text-[10px] uppercase tracking-widest text-gray-300 hover:text-white">Hoje</button>
+                            <button onclick="changeCalendarMonth(1)" class="w-8 h-8 rounded-lg bg-black/40 border border-white/10 hover:border-[#c5a02e]/50 text-[#c5a02e]">›</button>
+                        </div>
+                    </div>
+                    <p id="calendar-month-year" class="text-center text-xs uppercase tracking-[0.2em] text-gray-300 mb-4"></p>
+                    <div id="calendar-weekdays" class="calendar-grid mb-2"></div>
                     <div id="calendar" class="calendar-grid"></div>
                 </div>
                 <div id="alerts" class="space-y-4"></div>
+                <div class="glass p-6 rounded-3xl border border-white/10">
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="futuristic-font text-xs text-[#c5a02e] uppercase tracking-[0.2em]">Eventos da Data</h3>
+                        <p id="selected-date-label" class="text-[10px] text-gray-400 uppercase tracking-widest">--/--/----</p>
+                    </div>
+                    <div id="selected-date-events" class="space-y-3 max-h-[220px] overflow-y-auto pr-1"></div>
+                </div>
                 <div class="glass p-8 rounded-3xl">
                     <div class="flex gap-6 border-b border-white/5 mb-6">
                         <button onclick="setTab('active')" id="tab-active" class="pb-3 text-xs font-bold uppercase tracking-widest border-b-2 border-[#c5a02e]">Próximos</button>
@@ -239,6 +334,86 @@
                 </div>
             </div>
         </div>
+        </div>
+
+        <div id="section-financeiro" class="hidden space-y-8">
+            <div class="glass p-6 rounded-3xl border border-[#c5a02e]/30">
+                <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-4 mb-4">
+                    <div>
+                        <h2 class="futuristic-font text-xl text-[#c5a02e]">FINANCEIRO MK</h2>
+                        <p id="finance-current-month-label" class="text-[11px] uppercase tracking-[0.2em] text-gray-400 mt-1">Mês Atual</p>
+                    </div>
+                    <div class="text-[10px] uppercase tracking-widest text-gray-400">
+                        fechamento mensal automático e histórico arquivado
+                    </div>
+                </div>
+                <div class="flex flex-col md:flex-row gap-3">
+                    <select id="fin-month-selector" onchange="onFinanceMonthChange(this.value)" class="flex-1 bg-black/40 border border-gray-800 p-3 rounded-lg text-sm text-white focus:border-[#c5a02e] outline-none"></select>
+                    <button onclick="exportFinancialReportPDF()" class="bg-[#c5a02e] text-black font-bold px-6 rounded-lg text-[11px] uppercase tracking-widest hover:brightness-110">
+                        Gerar Relatório PDF
+                    </button>
+                </div>
+                <p class="text-[11px] text-gray-400 mt-4">
+                    Fórmula do mês: <span class="text-green-400">Entradas</span> - <span class="text-red-400">Reserva de Custos (15%)</span> - <span class="text-red-300">Dívidas Ativas</span> = <span class="text-purple-300">Saldo de Partilha</span>.
+                </p>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-6 gap-6">
+                <div class="glass p-5 rounded-2xl border border-green-500/30">
+                    <p class="text-[10px] uppercase tracking-wider text-gray-500">Entradas do Mês</p>
+                    <p id="fin-inflow" class="text-2xl font-bold text-green-400 mt-2">R$ 0,00</p>
+                </div>
+                <div class="glass p-5 rounded-2xl border border-red-500/30">
+                    <p class="text-[10px] uppercase tracking-wider text-gray-500">Reserva Custos (15%)</p>
+                    <p id="fin-reserve" class="text-2xl font-bold text-red-300 mt-2">R$ 0,00</p>
+                </div>
+                <div class="glass p-5 rounded-2xl border border-red-500/30">
+                    <p class="text-[10px] uppercase tracking-wider text-gray-500">Abate Dívidas</p>
+                    <p id="fin-debts-total" class="text-2xl font-bold text-red-400 mt-2">R$ 0,00</p>
+                </div>
+                <div class="glass p-5 rounded-2xl border border-red-500/30">
+                    <p class="text-[10px] uppercase tracking-wider text-gray-500">Saídas (Custos + Dívidas)</p>
+                    <p id="fin-outflow" class="text-2xl font-bold text-red-400 mt-2">R$ 0,00</p>
+                </div>
+                <div class="glass p-5 rounded-2xl border border-purple-500/30">
+                    <p class="text-[10px] uppercase tracking-wider text-gray-500">Saldo da Partilha</p>
+                    <p id="fin-net" class="text-2xl font-bold text-purple-300 mt-2">R$ 0,00</p>
+                </div>
+                <div class="glass p-5 rounded-2xl border border-[#c5a02e]/30">
+                    <p class="text-[10px] uppercase tracking-wider text-gray-500">Total Arrecadado MK</p>
+                    <p id="fin-mk-total" class="text-2xl font-bold text-[#c5a02e] mt-2">R$ 0,00</p>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                <div class="lg:col-span-7 glass p-6 rounded-3xl border border-white/10">
+                    <h3 class="futuristic-font text-sm text-[#c5a02e] mb-4 uppercase tracking-[0.2em]">Distribuição do Mês</h3>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-center">
+                        <div class="p-4 rounded-xl bg-black/30 border border-white/10">
+                            <p class="text-[10px] uppercase text-gray-500">Mikael</p>
+                            <p id="fin-mikael" class="text-xl font-bold text-white mt-2">R$ 0,00</p>
+                        </div>
+                        <div class="p-4 rounded-xl bg-black/30 border border-white/10">
+                            <p class="text-[10px] uppercase text-gray-500">Claudinho</p>
+                            <p id="fin-claudinho" class="text-xl font-bold text-white mt-2">R$ 0,00</p>
+                        </div>
+                        <div class="p-4 rounded-xl bg-[#c5a02e]/10 border border-[#c5a02e]/30">
+                            <p class="text-[10px] uppercase text-[#d8ba68]">MK</p>
+                            <p id="fin-mk-share" class="text-xl font-bold text-[#c5a02e] mt-2">R$ 0,00</p>
+                        </div>
+                    </div>
+                    <div class="mt-5">
+                        <h4 class="text-xs uppercase tracking-widest text-gray-400 mb-2">Dívidas abatidas no mês</h4>
+                        <div id="fin-debt-breakdown" class="space-y-2"></div>
+                    </div>
+                </div>
+
+                <div class="lg:col-span-5 glass p-6 rounded-3xl border border-white/10">
+                    <h3 class="futuristic-font text-sm text-[#c5a02e] mb-4 uppercase tracking-[0.2em]">Histórico Arquivado</h3>
+                    <div id="fin-archive-list" class="space-y-3 max-h-[360px] overflow-y-auto pr-1"></div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -250,18 +425,7 @@
         // REGISTRO DE SERVICE WORKER PARA PWA
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                const swCode = `
-                    const CACHE_NAME = 'mk-gestao-v1';
-                    self.addEventListener('install', (e) => {
-                        e.waitUntil(caches.open(CACHE_NAME).then(cache => cache.addAll(['./'])));
-                    });
-                    self.addEventListener('fetch', (e) => {
-                        e.respondWith(caches.match(e.request).then(response => response || fetch(e.request)));
-                    });
-                `;
-                const blob = new Blob([swCode], { type: 'application/javascript' });
-                const swUrl = URL.createObjectURL(blob);
-                navigator.serviceWorker.register(swUrl).catch(err => console.log('SW Error:', err));
+                navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW Error:', err));
             });
         }
 
@@ -271,10 +435,21 @@
         let db_debts = [];
         let activeTab = 'active';
         let isSyncing = false;
+        let activeEventId = null;
+        let calendarCursor = new Date();
+        let selectedDateISO = '';
+        let activeMainTab = 'operacional';
+        let selectedFinanceMonth = '';
 
         // INICIALIZAÇÃO
         window.onload = () => {
-            initBackground();
+            try {
+                initBackground();
+            } catch (err) {
+                console.warn('Background desativado neste dispositivo:', err);
+                const canvas = document.getElementById('canvas-3d');
+                if (canvas) canvas.style.display = 'none';
+            }
             fetchData();
             setInterval(fetchData, 300000);
         };
@@ -292,14 +467,22 @@
                 
                 if (result.success && result.data) {
                     db_raw_data = result.data;
-                    db_debts = db_raw_data.dividas || [];
+                    db_debts = (db_raw_data.dividas || []).map(normalizeDebtRecord).filter(Boolean);
                     db_events = (db_raw_data.contratos || []).map(c => ({
                         id: c.id_evento,
                         cliente: c.cliente?.nome || "Sem Nome",
                         data_original: c.logistica?.data || "00/00/0000",
-                        data_iso: convertToISO(c.logistica?.data || ""),
-                        valor: parseFloat(c.valor) || 0,
-                        status: c.status || "confirmado"
+                        data_iso: normalizeISODateInput(c.logistica?.data || ""),
+                        hora: extractEventTime(c),
+                        endereco: c.logistica?.endereco || "",
+                        cidade: c.logistica?.cidade || "",
+                        telefone: c.cliente?.fone || "",
+                        documento: c.cliente?.doc || "",
+                        servicos: Array.isArray(c.servicos) ? c.servicos.filter(Boolean) : [],
+                        valor: resolveEventValue(c),
+                        status: normalizeStatus(c.status),
+                        financialReversed: Boolean(c.financeiro_estornado || c.estornado_financeiro || c.ignorar_financeiro),
+                        downloadUrl: getContractDownloadUrl(c)
                     }));
                 }
             } catch (err) {
@@ -334,7 +517,7 @@
         async function saveChanges() {
             const id = document.getElementById('view-id').innerText.replace('ID: #', '').trim();
             const val = parseFloat(document.getElementById('field-value').value) || 0;
-            const status = document.getElementById('field-status').value;
+            const status = normalizeStatus(document.getElementById('field-status').value);
 
             document.getElementById('saving-indicator').style.display = 'flex';
 
@@ -350,6 +533,48 @@
                 }
             }
             document.getElementById('saving-indicator').style.display = 'none';
+        }
+
+        async function deleteEvent() {
+            const id = document.getElementById('view-id').innerText.replace('ID: #', '').trim();
+            if (!id) return;
+            if (!confirm('Excluir este evento definitivamente? Esta ação não pode ser desfeita.')) return;
+
+            document.getElementById('saving-indicator').style.display = 'flex';
+            db_raw_data.contratos = (db_raw_data.contratos || []).filter(c => String(c.id_evento) !== String(id));
+            const res = await syncFullToDrive();
+            document.getElementById('saving-indicator').style.display = 'none';
+            if (res.success) {
+                togglePanel(false);
+                fetchData();
+            }
+        }
+
+        async function toggleFinancialReversal() {
+            const id = document.getElementById('view-id').innerText.replace('ID: #', '').trim();
+            if (!id) return;
+
+            const contrato = (db_raw_data.contratos || []).find(c => String(c.id_evento) === String(id));
+            if (!contrato) return;
+
+            const isReversed = Boolean(contrato.financeiro_estornado || contrato.estornado_financeiro || contrato.ignorar_financeiro);
+            const nextState = !isReversed;
+            const msg = nextState
+                ? 'Estornar este evento do financeiro? Ele deixará de entrar nos relatórios e dashboards.'
+                : 'Reverter estorno financeiro? O evento voltará a ser contabilizado.';
+            if (!confirm(msg)) return;
+
+            document.getElementById('saving-indicator').style.display = 'flex';
+            contrato.financeiro_estornado = nextState;
+            contrato.estornado_financeiro = nextState;
+            contrato.ignorar_financeiro = nextState;
+
+            const res = await syncFullToDrive();
+            document.getElementById('saving-indicator').style.display = 'none';
+            if (res.success) {
+                fetchData();
+                togglePanel(false);
+            }
         }
 
         async function saveDebt() {
@@ -368,7 +593,8 @@
                 nome: name,
                 valor: val,
                 tipo: type,
-                data: new Date().toLocaleDateString('pt-BR')
+                data: new Date().toLocaleDateString('pt-BR'),
+                ativa: true
             });
 
             const res = await syncFullToDrive();
@@ -389,13 +615,31 @@
             document.getElementById('debt-loading').style.display = 'none';
         }
 
+        async function settleDebt(id) {
+            if (!confirm("Marcar dívida como quitada?")) return;
+            document.getElementById('debt-loading').style.display = 'flex';
+            const target = (db_raw_data.dividas || []).find(d => String(d.id) === String(id));
+            if (target) {
+                target.ativa = false;
+                target.data_quitacao = new Date().toLocaleDateString('pt-BR');
+            }
+            await syncFullToDrive();
+            fetchData();
+            document.getElementById('debt-loading').style.display = 'none';
+        }
+
         // LÓGICA DE INTERFACE (UI)
         function refreshUI() {
+            if (!selectedDateISO) selectedDateISO = toISODateLocal(new Date());
             renderList();
             renderCalendar();
+            renderAlerts();
+            renderSelectedDateEvents();
             renderDebts();
             updateStats();
             fillSelect();
+            renderFinancialDashboard();
+            setMainTab(activeMainTab);
         }
 
         function renderList() {
@@ -403,20 +647,38 @@
             container.innerHTML = '';
             
             const filtered = db_events.filter(e => 
-                activeTab === 'archive' ? e.status === 'concluido' : e.status !== 'concluido'
-            ).sort((a,b) => new Date(a.data_iso) - new Date(b.data_iso));
+                activeTab === 'archive' ? isArchivedEvent(e) : isActiveEvent(e)
+            ).sort((a,b) => {
+                const ad = getEventDateObj(a)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+                const bd = getEventDateObj(b)?.getTime() ?? Number.MAX_SAFE_INTEGER;
+                return ad - bd;
+            });
 
             filtered.forEach(e => {
                 const card = document.createElement('div');
-                card.className = "p-4 bg-white/5 border border-white/5 rounded-xl hover:border-[#c5a02e]/50 cursor-pointer transition-all";
+                card.className = "p-4 bg-black/25 border border-white/10 rounded-xl hover:border-[#c5a02e]/50 hover:bg-black/40 cursor-pointer transition-all";
                 card.onclick = () => openEdit(e);
+                const displayStatus = getDisplayStatus(e);
+                const normalizedStatus = getNormalizedEventStatus(e);
+                const statusClass = normalizedStatus === 'confirmado'
+                    ? 'text-green-500'
+                    : normalizedStatus === 'concluido'
+                        ? 'text-blue-400'
+                        : normalizedStatus === 'cancelado'
+                            ? 'text-red-400'
+                        : normalizedStatus === 'pendente'
+                        ? 'text-yellow-500'
+                        : 'text-gray-300';
                 card.innerHTML = `
                     <div class="flex justify-between items-start">
                         <div>
-                            <p class="text-[10px] text-gray-500 uppercase font-bold">${e.data_original}</p>
+                            <p class="text-[10px] text-gray-400 uppercase font-bold">${e.data_original}${e.hora ? ` • ${e.hora}` : ''}</p>
                             <h4 class="font-bold text-sm text-white">${e.cliente}</h4>
+                            <p class="text-[10px] text-[#c5a02e] mt-1">${getEventTypeLabel(e)}</p>
+                            <p class="text-[10px] text-gray-500 mt-1">${buildAddressText(e) || 'Local não informado'}</p>
+                            ${e.financialReversed ? '<p class="text-[10px] text-blue-300 mt-1 uppercase">Estornado do Financeiro</p>' : ''}
                         </div>
-                        <p class="text-[10px] font-bold ${e.status === 'confirmado' ? 'text-green-500' : 'text-yellow-500'} uppercase">${e.status}</p>
+                        <p class="text-[10px] font-bold ${statusClass} uppercase">${displayStatus}</p>
                     </div>
                 `;
                 container.appendChild(card);
@@ -426,7 +688,14 @@
         function renderDebts() {
             const container = document.getElementById('list-debts');
             container.innerHTML = '';
-            db_debts.forEach(d => {
+            const activeDebts = getActiveDebts();
+
+            if (!activeDebts.length) {
+                container.innerHTML = `<p class="text-xs text-gray-500">Sem dívidas ativas.</p>`;
+                return;
+            }
+
+            activeDebts.forEach(d => {
                 const item = document.createElement('div');
                 item.className = "flex justify-between items-center p-3 bg-black/20 rounded-lg border border-white/5 text-[10px]";
                 item.innerHTML = `
@@ -436,6 +705,7 @@
                     </div>
                     <div class="text-right flex items-center gap-3">
                         <span class="text-red-400 font-bold">R$ ${d.valor.toLocaleString('pt-BR')}</span>
+                        <button onclick="settleDebt(${d.id})" class="text-blue-400 hover:text-blue-300 text-[10px] uppercase">Quitar</button>
                         <button onclick="deleteDebt(${d.id})" class="text-gray-600 hover:text-red-500">✕</button>
                     </div>
                 `;
@@ -444,8 +714,8 @@
         }
 
         function updateStats() {
-            const total = db_events.reduce((sum, e) => sum + e.valor, 0);
-            const debts = db_debts.reduce((sum, d) => sum + d.valor, 0);
+            const total = getFinancialEligibleEvents().reduce((sum, e) => sum + e.valor, 0);
+            const debts = getActiveDebts().reduce((sum, d) => sum + d.valor, 0);
             const costs = total * 0.15;
             const net = (total - costs - debts);
 
@@ -455,35 +725,206 @@
             document.getElementById('stat-net').innerText = `R$ ${net.toLocaleString('pt-BR')}`;
         }
 
+        function changeCalendarMonth(offset) {
+            calendarCursor = new Date(calendarCursor.getFullYear(), calendarCursor.getMonth() + offset, 1);
+            renderCalendar();
+        }
+
+        function goToCurrentMonth() {
+            calendarCursor = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+            renderCalendar();
+        }
+
         function renderCalendar() {
             const cal = document.getElementById('calendar');
+            const weekdays = document.getElementById('calendar-weekdays');
+            const monthLabel = document.getElementById('calendar-month-year');
             cal.innerHTML = '';
-            const today = new Date();
-            const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
-            
-            for(let i=1; i<=daysInMonth; i++) {
-                const day = document.createElement('div');
-                const isEvent = db_events.some(e => {
-                    const d = new Date(e.data_iso);
-                    return d.getDate() === i && d.getMonth() === today.getMonth();
-                });
-                day.className = `calendar-day ${isEvent ? 'day-active' : ''}`;
-                day.innerText = i;
+            weekdays.innerHTML = '';
+
+            const weekLabels = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sab', 'Dom'];
+            weekLabels.forEach(label => {
+                const d = document.createElement('div');
+                d.className = 'calendar-weekday';
+                d.innerText = label;
+                weekdays.appendChild(d);
+            });
+
+            monthLabel.innerText = calendarCursor.toLocaleDateString('pt-BR', {
+                month: 'long',
+                year: 'numeric'
+            }).toUpperCase();
+
+            const year = calendarCursor.getFullYear();
+            const month = calendarCursor.getMonth();
+            const firstDayIdx = (new Date(year, month, 1).getDay() + 6) % 7;
+            const daysInMonth = new Date(year, month + 1, 0).getDate();
+            const todayIso = toISODateLocal(new Date());
+
+            for (let i = 0; i < firstDayIdx; i++) {
+                const empty = document.createElement('div');
+                empty.className = 'calendar-day calendar-day-empty';
+                cal.appendChild(empty);
+            }
+
+            for (let dayNumber = 1; dayNumber <= daysInMonth; dayNumber++) {
+                const dayDate = new Date(year, month, dayNumber);
+                const dayIso = toISODateLocal(dayDate);
+                const eventsOnDay = getEventsByISODate(dayIso);
+                const pendingEvents = eventsOnDay.filter(e => !isConcludedStatus(e) && !isCanceledStatus(e));
+                const completedEvents = eventsOnDay.filter(e => isConcludedStatus(e));
+                const canceledEvents = eventsOnDay.filter(e => isCanceledStatus(e));
+                const isToday = dayIso === todayIso;
+                const isSelected = dayIso === selectedDateISO;
+
+                const day = document.createElement('button');
+                day.type = 'button';
+                day.className = `calendar-day ${pendingEvents.length ? 'day-active' : ''} ${!pendingEvents.length && completedEvents.length ? 'day-completed' : ''} ${!pendingEvents.length && !completedEvents.length && canceledEvents.length ? 'day-cancelled' : ''} ${isToday ? 'day-today' : ''} ${isSelected ? 'day-selected' : ''}`;
+                day.onclick = () => {
+                    selectedDateISO = dayIso;
+                    renderCalendar();
+                    renderSelectedDateEvents();
+                };
+
+                const dayText = document.createElement('span');
+                dayText.innerText = dayNumber;
+                day.appendChild(dayText);
+
+                if (eventsOnDay.length) {
+                    const dot = document.createElement('span');
+                    dot.className = `event-dot ${!pendingEvents.length && completedEvents.length ? 'event-dot-completed' : ''} ${!pendingEvents.length && !completedEvents.length && canceledEvents.length ? 'event-dot-cancelled' : ''}`;
+                    day.appendChild(dot);
+
+                    const priority = getDayPriority(dayIso, eventsOnDay);
+                    if (priority) {
+                        const priorityBadge = document.createElement('span');
+                        priorityBadge.className = `event-priority-badge ${priority.className}`;
+                        priorityBadge.innerText = priority.label;
+                        day.appendChild(priorityBadge);
+                    }
+                }
+
                 cal.appendChild(day);
             }
         }
 
+        function renderAlerts() {
+            const container = document.getElementById('alerts');
+            if (!container) return;
+            container.innerHTML = '';
+
+            const now = new Date();
+            const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+            const upcoming = db_events
+                .filter(e => !isConcludedStatus(e) && !isCanceledStatus(e))
+                .map(e => ({ ...e, dateObj: getEventDateObj(e) }))
+                .filter(e => e.dateObj && e.dateObj >= startOfToday)
+                .sort((a, b) => a.dateObj - b.dateObj);
+
+            const todayEvents = upcoming.filter(e => e.data_iso === toISODateLocal(now));
+            const nearest = upcoming[0];
+
+            if (todayEvents.length) {
+                const urgent = todayEvents[0];
+                container.innerHTML = `
+                    <div class="glass p-4 rounded-2xl border border-red-400/50 bg-red-500/10">
+                        <p class="text-[10px] uppercase tracking-widest text-red-300 font-bold">Alerta de Execução</p>
+                        <h4 class="text-sm font-bold text-white mt-2">${urgent.cliente}</h4>
+                        <p class="text-[11px] text-gray-200 mt-1">${urgent.data_original}${urgent.hora ? ` • ${urgent.hora}` : ''}</p>
+                        <p class="text-[11px] text-[#f0bf4c] mt-1">${getEventTypeLabel(urgent)}</p>
+                        <p class="text-[11px] text-gray-300 mt-1">${buildAddressText(urgent) || 'Local não informado'}</p>
+                        <p class="text-[10px] uppercase tracking-wider text-red-200 mt-3">Evento para executar hoje</p>
+                    </div>
+                `;
+                return;
+            }
+
+            if (!nearest) {
+                container.innerHTML = `
+                    <div class="glass p-4 rounded-2xl border border-white/10">
+                        <p class="text-[10px] uppercase tracking-widest text-gray-500">Alertas Inteligentes</p>
+                        <p class="text-sm text-gray-300 mt-2">Sem eventos futuros pendentes no momento.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const diffDays = Math.ceil((nearest.dateObj - startOfToday) / 86400000);
+            const whenText = diffDays === 0 ? 'Hoje' : diffDays === 1 ? 'Amanhã' : `Em ${diffDays} dias`;
+            container.innerHTML = `
+                <div class="glass p-4 rounded-2xl border border-[#c5a02e]/40 bg-[#c5a02e]/5">
+                    <p class="text-[10px] uppercase tracking-widest text-[#c5a02e] font-bold">Próximo Evento</p>
+                    <h4 class="text-sm font-bold text-white mt-2">${nearest.cliente}</h4>
+                    <p class="text-[11px] text-gray-300 mt-1">${nearest.data_original}${nearest.hora ? ` • ${nearest.hora}` : ''}</p>
+                    <p class="text-[11px] text-[#c5a02e] mt-1">${getEventTypeLabel(nearest)}</p>
+                    <p class="text-[11px] text-gray-400 mt-1">${buildAddressText(nearest) || 'Local não informado'}</p>
+                    <p class="text-[10px] uppercase tracking-wider text-green-400 mt-3">${whenText} • ${getDisplayStatus(nearest)}</p>
+                </div>
+            `;
+        }
+
+        function renderSelectedDateEvents() {
+            const label = document.getElementById('selected-date-label');
+            const container = document.getElementById('selected-date-events');
+            if (!label || !container) return;
+
+            const selected = parseISOAsLocalDate(selectedDateISO);
+            label.innerText = selected ? selected.toLocaleDateString('pt-BR') : '--/--/----';
+
+            const events = getEventsByISODate(selectedDateISO).sort((a, b) => a.cliente.localeCompare(b.cliente, 'pt-BR'));
+            container.innerHTML = '';
+
+            if (!events.length) {
+                container.innerHTML = `<p class="text-xs text-gray-500">Nenhum evento nesta data.</p>`;
+                return;
+            }
+
+            events.forEach(e => {
+                const item = document.createElement('button');
+                item.type = 'button';
+                item.className = 'w-full text-left p-3 rounded-xl border border-white/10 bg-black/20 hover:border-[#c5a02e]/45 transition-all';
+                item.onclick = () => openEdit(e);
+                item.innerHTML = `
+                    <p class="text-[10px] uppercase tracking-widest text-gray-400">${e.hora || '--:--'} • ${getDisplayStatus(e)}</p>
+                    <p class="text-sm font-bold text-white mt-1">${e.cliente}</p>
+                    <p class="text-[11px] text-[#c5a02e] mt-1">${getEventTypeLabel(e)}</p>
+                    <p class="text-[11px] text-gray-400 mt-1">${buildAddressText(e) || 'Local não informado'}</p>
+                    ${e.financialReversed ? '<p class="text-[10px] text-blue-300 mt-1 uppercase">Estornado do Financeiro</p>' : ''}
+                `;
+                container.appendChild(item);
+            });
+        }
+
         function openEdit(event) {
+            activeEventId = event.id;
+            if (event.data_iso) {
+                selectedDateISO = event.data_iso;
+                const d = parseISOAsLocalDate(event.data_iso);
+                if (d) {
+                    calendarCursor = new Date(d.getFullYear(), d.getMonth(), 1);
+                }
+                renderCalendar();
+                renderSelectedDateEvents();
+            }
             document.getElementById('view-id').innerText = `ID: #${event.id}`;
             document.getElementById('view-client').innerText = event.cliente;
             document.getElementById('view-date').innerText = event.data_original;
+            document.getElementById('view-time').innerText = event.hora || '--:--';
+            document.getElementById('view-service').innerText = getEventTypeLabel(event);
+            document.getElementById('view-phone').innerText = event.telefone || 'Não informado';
+            document.getElementById('view-doc').innerText = event.documento || 'Não informado';
+            document.getElementById('view-address').innerText = buildAddressText(event) || 'Não informado';
+            document.getElementById('view-financial-state').innerText = event.financialReversed ? 'Estornado (fora do financeiro)' : 'Contabilizado no financeiro';
+            document.getElementById('btn-toggle-financial').innerText = event.financialReversed ? 'Reverter Estorno Financeiro' : 'Estornar no Financeiro';
             document.getElementById('field-value').value = event.valor;
-            document.getElementById('field-status').value = event.status;
+            document.getElementById('field-status').value = getNormalizedEventStatus(event);
             togglePanel(true);
         }
 
         function togglePanel(show) {
             document.getElementById('edit-panel').classList.toggle('active', show);
+            if (!show) activeEventId = null;
         }
 
         function setTab(tab) {
@@ -493,10 +934,557 @@
             renderList();
         }
 
+        function setMainTab(tab) {
+            activeMainTab = tab;
+            const op = document.getElementById('section-operacional');
+            const fin = document.getElementById('section-financeiro');
+            const opBtn = document.getElementById('main-tab-operacional');
+            const finBtn = document.getElementById('main-tab-financeiro');
+
+            const isOperational = tab === 'operacional';
+            op.classList.toggle('hidden', !isOperational);
+            fin.classList.toggle('hidden', isOperational);
+
+            opBtn.className = isOperational
+                ? 'px-5 py-2 rounded-xl text-[11px] uppercase tracking-widest font-bold bg-[#c5a02e] text-black'
+                : 'px-5 py-2 rounded-xl text-[11px] uppercase tracking-widest font-bold text-gray-300 bg-black/40 border border-white/10';
+
+            finBtn.className = !isOperational
+                ? 'px-5 py-2 rounded-xl text-[11px] uppercase tracking-widest font-bold bg-[#c5a02e] text-black'
+                : 'px-5 py-2 rounded-xl text-[11px] uppercase tracking-widest font-bold text-gray-300 bg-black/40 border border-white/10';
+        }
+
         function convertToISO(str) {
-            if(!str || !str.includes('/')) return "2024-01-01";
-            const [d, m, y] = str.split('/');
+            if(!str || typeof str !== 'string' || !str.includes('/')) return "";
+            const [d, m, y] = str.trim().split('/');
+            if (!d || !m || !y) return "";
             return `${y}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+        }
+
+        function parseISOAsLocalDate(isoDate) {
+            if (!isoDate || !isoDate.includes('-')) return null;
+            const [year, month, day] = isoDate.split('-').map(Number);
+            if (!year || !month || !day) return null;
+            return new Date(year, month - 1, day);
+        }
+
+        function toISODateLocal(date) {
+            const y = date.getFullYear();
+            const m = String(date.getMonth() + 1).padStart(2, '0');
+            const d = String(date.getDate()).padStart(2, '0');
+            return `${y}-${m}-${d}`;
+        }
+
+        function getEventsByISODate(isoDate) {
+            return db_events.filter(e => normalizeISODateInput(e.data_iso || e.data_original) === isoDate);
+        }
+
+        function getDayPriority(dayIso, eventsOnDay) {
+            if (!eventsOnDay?.length) return null;
+
+            const dayDate = parseISOAsLocalDate(dayIso);
+            if (!dayDate) return null;
+
+            const today = new Date();
+            const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+            const tomorrowStart = new Date(todayStart);
+            tomorrowStart.setDate(tomorrowStart.getDate() + 1);
+
+            const hasOnlyCanceled = eventsOnDay.every(e => isCanceledStatus(e));
+            if (hasOnlyCanceled) return { label: 'Cancelado', className: 'badge-canceled' };
+            const hasPending = eventsOnDay.some(e => !isConcludedStatus(e) && !isCanceledStatus(e));
+            if (!hasPending) return { label: 'Concluído', className: 'badge-completed' };
+
+            if (dayDate < todayStart) return { label: 'Atrasado', className: 'badge-overdue' };
+            if (dayIso === toISODateLocal(todayStart)) return { label: 'Hoje', className: 'badge-today' };
+            if (dayIso === toISODateLocal(tomorrowStart)) return { label: 'Amanhã', className: 'badge-tomorrow' };
+            return null;
+        }
+
+        function normalizeISODateInput(value) {
+            if (!value || typeof value !== 'string') return '';
+            const trimmed = value.trim();
+            if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+            if (trimmed.includes('/')) return convertToISO(trimmed);
+            return '';
+        }
+
+        function getEventDateObj(event) {
+            return parseISOAsLocalDate(normalizeISODateInput(event?.data_iso || event?.data_original));
+        }
+
+        function isPastEvent(event) {
+            const eventDate = getEventDateObj(event);
+            if (!eventDate) return false;
+            const today = new Date();
+            const todayStart = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+            return eventDate < todayStart;
+        }
+
+        function isArchivedEvent(event) {
+            return isConcludedStatus(event) || isCanceledStatus(event) || isPastEvent(event);
+        }
+
+        function isActiveEvent(event) {
+            return !isArchivedEvent(event);
+        }
+
+        function getDisplayStatus(event) {
+            if (isConcludedStatus(event)) return 'concluído';
+            if (isCanceledStatus(event)) return 'cancelado';
+            if (isPastEvent(event)) return 'arquivado';
+            const status = getNormalizedEventStatus(event);
+            if (status === 'confirmado') return 'confirmado';
+            return 'pendente';
+        }
+
+        function getFinancialEligibleEvents() {
+            return db_events.filter(e => !isCanceledStatus(e) && !e.financialReversed);
+        }
+
+        function normalizeDebtRecord(rawDebt) {
+            if (!rawDebt) return null;
+            const value = parseMoney(rawDebt.valor);
+            return {
+                ...rawDebt,
+                id: rawDebt.id || Date.now() + Math.random(),
+                nome: rawDebt.nome || 'Dívida sem nome',
+                tipo: rawDebt.tipo || 'Outros',
+                valor: value,
+                ativa: rawDebt.ativa !== false && rawDebt.ativo !== false
+            };
+        }
+
+        function getActiveDebts() {
+            return db_debts.filter(d => d.ativa !== false && parseMoney(d.valor) > 0);
+        }
+
+        function parsePtBrDate(dateStr) {
+            if (!dateStr || typeof dateStr !== 'string' || !dateStr.includes('/')) return null;
+            const [d, m, y] = dateStr.split('/').map(Number);
+            if (!d || !m || !y) return null;
+            return new Date(y, m - 1, d);
+        }
+
+        function getMonthBounds(monthKey) {
+            const [year, month] = monthKey.split('-').map(Number);
+            const start = new Date(year, month - 1, 1);
+            const end = new Date(year, month, 0);
+            return { start, end };
+        }
+
+        function isCurrentMonthKey(monthKey) {
+            return monthKey === getMonthKeyFromDate(new Date());
+        }
+
+        function getDebtsForMonth(monthKey) {
+            if (isCurrentMonthKey(monthKey)) return getActiveDebts();
+            const { start, end } = getMonthBounds(monthKey);
+
+            return db_debts.filter(d => {
+                const value = parseMoney(d.valor);
+                if (value <= 0) return false;
+
+                const createdAt = parsePtBrDate(d.data);
+                const settledAt = parsePtBrDate(d.data_quitacao);
+
+                const createdAfterMonth = createdAt && createdAt > end;
+                if (createdAfterMonth) return false;
+
+                const settledBeforeMonth = settledAt && settledAt < start;
+                if (settledBeforeMonth) return false;
+
+                if (!createdAt && d.ativa === false && settledAt && settledAt < end) return false;
+                return true;
+            });
+        }
+
+        function getMonthKeyFromDate(dateObj) {
+            return `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(2, '0')}`;
+        }
+
+        function getMonthLabel(monthKey) {
+            const [year, month] = monthKey.split('-').map(Number);
+            return new Date(year, (month || 1) - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }).toUpperCase();
+        }
+
+        function calculateMonthlySummary(monthKey) {
+            const monthEvents = getFinancialEligibleEvents().filter(e => {
+                const dateObj = getEventDateObj(e);
+                return dateObj && getMonthKeyFromDate(dateObj) === monthKey;
+            });
+
+            const inflow = monthEvents.reduce((sum, e) => sum + parseMoney(e.valor), 0);
+            const reserve = inflow * 0.15;
+            const debtItems = getDebtsForMonth(monthKey).map(d => ({ nome: d.nome, tipo: d.tipo, valor: parseMoney(d.valor) }));
+            const debtTotal = debtItems.reduce((sum, d) => sum + d.valor, 0);
+            const net = inflow - reserve - debtTotal;
+            const split = net / 3;
+
+            return {
+                monthKey,
+                inflow,
+                reserve,
+                debtItems,
+                debtTotal,
+                outflow: reserve + debtTotal,
+                net,
+                mikael: split,
+                claudinho: split,
+                mk: split
+            };
+        }
+
+        function getAvailableMonthKeys() {
+            const currentMonthKey = getMonthKeyFromDate(new Date());
+            const eventMonths = db_events
+                .map(e => getEventDateObj(e))
+                .filter(Boolean)
+                .map(getMonthKeyFromDate);
+            const months = [...new Set([currentMonthKey, ...eventMonths])].sort((a, b) => b.localeCompare(a));
+            return months;
+        }
+
+        function onFinanceMonthChange(monthKey) {
+            selectedFinanceMonth = monthKey;
+            renderFinancialDashboard();
+        }
+
+        function renderFinancialDashboard() {
+            const currentMonthKey = getMonthKeyFromDate(new Date());
+            const availableMonths = getAvailableMonthKeys();
+            if (!selectedFinanceMonth || !availableMonths.includes(selectedFinanceMonth)) {
+                selectedFinanceMonth = currentMonthKey;
+            }
+            const current = calculateMonthlySummary(selectedFinanceMonth);
+
+            const monthLabel = document.getElementById('finance-current-month-label');
+            if (monthLabel) monthLabel.innerText = `Mês em Análise • ${getMonthLabel(selectedFinanceMonth)}`;
+
+            const selector = document.getElementById('fin-month-selector');
+            if (selector) {
+                selector.innerHTML = '';
+                availableMonths.forEach(monthKey => {
+                    const opt = document.createElement('option');
+                    opt.value = monthKey;
+                    opt.innerText = `${monthKey === currentMonthKey ? 'Atual - ' : ''}${getMonthLabel(monthKey)}`;
+                    selector.appendChild(opt);
+                });
+                selector.value = selectedFinanceMonth;
+            }
+
+            const assignMoney = (id, value) => {
+                const el = document.getElementById(id);
+                if (el) el.innerText = formatMoneyBRL(value);
+            };
+
+            assignMoney('fin-inflow', current.inflow);
+            assignMoney('fin-reserve', current.reserve);
+            assignMoney('fin-debts-total', current.debtTotal);
+            assignMoney('fin-outflow', current.outflow);
+            assignMoney('fin-net', current.net);
+            assignMoney('fin-mk-total', current.inflow);
+            assignMoney('fin-mikael', current.mikael);
+            assignMoney('fin-claudinho', current.claudinho);
+            assignMoney('fin-mk-share', current.mk);
+
+            const debtBreakdown = document.getElementById('fin-debt-breakdown');
+            if (debtBreakdown) {
+                debtBreakdown.innerHTML = '';
+                if (!current.debtItems.length) {
+                    debtBreakdown.innerHTML = `<p class="text-xs text-gray-500">Sem dívidas ativas para abater este mês.</p>`;
+                } else {
+                    current.debtItems.forEach(item => {
+                        const row = document.createElement('div');
+                        row.className = 'flex items-center justify-between p-2 rounded-lg bg-black/20 border border-white/5 text-xs';
+                        row.innerHTML = `
+                            <div>
+                                <p class="text-white font-bold">${item.nome}</p>
+                                <p class="text-gray-500 uppercase text-[10px]">${item.tipo}</p>
+                            </div>
+                            <p class="text-red-400 font-bold">${formatMoneyBRL(item.valor)}</p>
+                        `;
+                        debtBreakdown.appendChild(row);
+                    });
+                }
+            }
+
+            const archiveList = document.getElementById('fin-archive-list');
+            if (archiveList) {
+                archiveList.innerHTML = '';
+                const archivedMonths = availableMonths.filter(k => k < currentMonthKey);
+                if (!archivedMonths.length) {
+                    archiveList.innerHTML = `<p class="text-xs text-gray-500">Sem meses anteriores arquivados.</p>`;
+                } else {
+                    archivedMonths.forEach(monthKey => {
+                        const report = calculateMonthlySummary(monthKey);
+                        const card = document.createElement('div');
+                        card.className = 'p-3 rounded-xl bg-black/25 border border-white/10';
+                        card.innerHTML = `
+                            <p class="text-[10px] uppercase tracking-widest text-gray-400">${getMonthLabel(monthKey)}</p>
+                            <div class="mt-2 grid grid-cols-2 gap-2 text-[11px]">
+                                <p class="text-gray-400">Entrou: <span class="text-green-400 font-bold">${formatMoneyBRL(report.inflow)}</span></p>
+                                <p class="text-gray-400">Saiu: <span class="text-red-400 font-bold">${formatMoneyBRL(report.outflow)}</span></p>
+                                <p class="text-gray-400">Mikael: <span class="text-white font-bold">${formatMoneyBRL(report.mikael)}</span></p>
+                                <p class="text-gray-400">Claudinho: <span class="text-white font-bold">${formatMoneyBRL(report.claudinho)}</span></p>
+                            </div>
+                            <p class="text-[11px] text-[#c5a02e] mt-2">MK: ${formatMoneyBRL(report.mk)}</p>
+                            <button onclick="exportFinancialReportPDF('${monthKey}')" class="mt-3 w-full p-2 rounded-lg bg-[#c5a02e]/15 border border-[#c5a02e]/35 text-[#c5a02e] text-[10px] uppercase tracking-widest font-bold hover:bg-[#c5a02e]/25">
+                                PDF deste Mês
+                            </button>
+                        `;
+                        archiveList.appendChild(card);
+                    });
+                }
+            }
+        }
+
+        function normalizeStatus(value) {
+            const raw = String(value || '')
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .toLowerCase()
+                .trim();
+
+            if (!raw) return 'pendente';
+            if (raw.includes('conclu') || raw.includes('finaliz') || raw.includes('arquivado')) return 'concluido';
+            if (raw.includes('cancel')) return 'cancelado';
+            if (raw.includes('confirm')) return 'confirmado';
+            if (raw.includes('pend')) return 'pendente';
+            return 'pendente';
+        }
+
+        function getNormalizedEventStatus(event) {
+            return normalizeStatus(event?.status);
+        }
+
+        function isConcludedStatus(event) {
+            return getNormalizedEventStatus(event) === 'concluido';
+        }
+
+        function isCanceledStatus(event) {
+            return getNormalizedEventStatus(event) === 'cancelado';
+        }
+
+        function parseMoney(value) {
+            if (typeof value === 'number' && Number.isFinite(value)) return value;
+            if (typeof value !== 'string') return 0;
+            const normalized = value
+                .replace(/[R$\s]/g, '')
+                .replace(/\./g, '')
+                .replace(',', '.');
+            const parsed = parseFloat(normalized);
+            return Number.isFinite(parsed) ? parsed : 0;
+        }
+
+        function resolveEventValue(contract) {
+            return parseMoney(contract.valor) ||
+                parseMoney(contract.logistica?.valor_evento_numero) ||
+                parseMoney(contract.logistica?.valor_evento);
+        }
+
+        function extractEventTime(contract) {
+            const explicitTime = contract.logistica?.hora;
+            if (explicitTime) return explicitTime;
+
+            const issuedAt = contract.data_emissao;
+            if (typeof issuedAt === 'string' && issuedAt.includes(',')) {
+                const parts = issuedAt.split(',');
+                return parts[1]?.trim() || '';
+            }
+            return '';
+        }
+
+        function buildAddressText(event) {
+            return [event.endereco, event.cidade].filter(Boolean).join(' - ');
+        }
+
+        function getEventTypeLabel(event) {
+            if (!Array.isArray(event?.servicos) || !event.servicos.length) return 'Serviço não informado';
+            return event.servicos.join(' • ');
+        }
+
+        function getContractDownloadUrl(contract) {
+            const directCandidates = [
+                contract.contrato_url,
+                contract.contratoUrl,
+                contract.link_contrato,
+                contract.url_contrato,
+                contract.pdf_url,
+                contract.url_pdf,
+                contract.arquivo_url,
+                contract.download_url
+            ];
+
+            const nestedCandidates = contract.logistica ? [
+                contract.logistica.contrato_url,
+                contract.logistica.link_contrato,
+                contract.logistica.pdf_url
+            ] : [];
+
+            const url = [...directCandidates, ...nestedCandidates].find(v => typeof v === 'string' && /^https?:\/\//i.test(v));
+            return url || '';
+        }
+
+        function downloadContract() {
+            if (!activeEventId) return;
+
+            const contract = (db_raw_data.contratos || []).find(c => String(c.id_evento) === String(activeEventId));
+            if (!contract) return;
+
+            const event = db_events.find(e => String(e.id) === String(activeEventId));
+            if (event?.downloadUrl) {
+                const a = document.createElement('a');
+                a.href = event.downloadUrl;
+                a.target = '_blank';
+                a.rel = 'noopener';
+                a.download = `contrato-${activeEventId}.pdf`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                return;
+            }
+
+            createContractPdf(contract, event);
+        }
+
+        function exportFinancialReportPDF(monthKeyArg) {
+            const jsPdfRef = window.jspdf?.jsPDF;
+            if (!jsPdfRef) {
+                alert('Erro ao gerar PDF financeiro. Recarregue a página e tente novamente.');
+                return;
+            }
+
+            const monthKey = monthKeyArg || selectedFinanceMonth || getMonthKeyFromDate(new Date());
+            const report = calculateMonthlySummary(monthKey);
+            const doc = new jsPdfRef({ unit: 'mm', format: 'a4' });
+            const pageWidth = doc.internal.pageSize.getWidth();
+            const margin = 14;
+            let y = 16;
+
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(15);
+            doc.text('RELATORIO FINANCEIRO MENSAL - MK', pageWidth / 2, y, { align: 'center' });
+            y += 9;
+
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(11);
+            doc.text(`Mes de referencia: ${getMonthLabel(monthKey)}`, margin, y);
+            y += 8;
+
+            const lines = [
+                `Entradas do mes: ${formatMoneyBRL(report.inflow)}`,
+                `Reserva de custos (15%): ${formatMoneyBRL(report.reserve)}`,
+                `Abate de dividas: ${formatMoneyBRL(report.debtTotal)}`,
+                `Saidas totais: ${formatMoneyBRL(report.outflow)}`,
+                `Saldo de partilha: ${formatMoneyBRL(report.net)}`,
+                `Mikael: ${formatMoneyBRL(report.mikael)}`,
+                `Claudinho: ${formatMoneyBRL(report.claudinho)}`,
+                `MK: ${formatMoneyBRL(report.mk)}`
+            ];
+            lines.forEach(line => {
+                doc.text(line, margin, y);
+                y += 7;
+            });
+
+            y += 2;
+            doc.setFont('helvetica', 'bold');
+            doc.text('Detalhamento de dividas consideradas:', margin, y);
+            y += 7;
+            doc.setFont('helvetica', 'normal');
+
+            if (!report.debtItems.length) {
+                doc.text('Sem dividas consideradas neste mes.', margin, y);
+                y += 7;
+            } else {
+                report.debtItems.forEach((item, index) => {
+                    const line = `${index + 1}. ${item.nome} (${item.tipo}) - ${formatMoneyBRL(item.valor)}`;
+                    const wrapped = doc.splitTextToSize(line, pageWidth - (margin * 2));
+                    doc.text(wrapped, margin, y);
+                    y += wrapped.length * 6;
+                    if (y > 275) {
+                        doc.addPage();
+                        y = 16;
+                    }
+                });
+            }
+
+            doc.setFontSize(9);
+            doc.text(`Gerado em ${new Date().toLocaleString('pt-BR')}`, margin, 287);
+            doc.save(`relatorio-financeiro-${monthKey}.pdf`);
+        }
+
+        function formatMoneyBRL(value) {
+            return `R$ ${parseMoney(value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+        }
+
+        function createContractPdf(contract, event) {
+            const jsPdfRef = window.jspdf?.jsPDF;
+            if (!jsPdfRef) {
+                alert('Erro ao gerar PDF. Recarregue a página e tente novamente.');
+                return;
+            }
+
+            const doc = new jsPdfRef({ unit: 'mm', format: 'a4' });
+            const pageWidth = doc.internal.pageSize.getWidth();
+            const marginX = 15;
+            let y = 18;
+
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(16);
+            doc.text('CONTRATO - MK AUDIOVISUAL', pageWidth / 2, y, { align: 'center' });
+            y += 10;
+
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(11);
+            const lines = [
+                `ID do Evento: ${contract.id_evento || ''}`,
+                `Data de Emissao: ${contract.data_emissao || ''}`,
+                `Cliente: ${contract.cliente?.nome || ''}`,
+                `Documento: ${contract.cliente?.doc || ''}`,
+                `Telefone: ${contract.cliente?.fone || ''}`,
+                `Data do Evento: ${event?.data_original || contract.logistica?.data || ''}`,
+                `Hora do Evento: ${event?.hora || contract.logistica?.hora || ''}`,
+                `Endereco: ${contract.logistica?.endereco || ''}`,
+                `Cidade: ${contract.logistica?.cidade || ''}`,
+                `Valor do Contrato: ${formatMoneyBRL(event?.valor ?? contract.valor ?? contract.logistica?.valor_evento_numero ?? contract.logistica?.valor_evento)}`,
+                `Status: ${contract.status || ''}`
+            ];
+
+            lines.forEach(line => {
+                doc.text(String(line), marginX, y);
+                y += 7;
+            });
+
+            if (Array.isArray(contract.servicos) && contract.servicos.length) {
+                y += 2;
+                doc.setFont('helvetica', 'bold');
+                doc.text('Servicos contratados:', marginX, y);
+                y += 7;
+                doc.setFont('helvetica', 'normal');
+                contract.servicos.forEach(service => {
+                    const wrapped = doc.splitTextToSize(`- ${service}`, pageWidth - (marginX * 2));
+                    doc.text(wrapped, marginX, y);
+                    y += wrapped.length * 6;
+                });
+            }
+
+            if (typeof contract.assinatura === 'string' && contract.assinatura.startsWith('data:image/')) {
+                y += 4;
+                if (y > 210) {
+                    doc.addPage();
+                    y = 20;
+                }
+                doc.setFont('helvetica', 'bold');
+                doc.text('Assinatura:', marginX, y);
+                y += 4;
+                doc.addImage(contract.assinatura, 'JPEG', marginX, y, 70, 30);
+                y += 34;
+            }
+
+            doc.setFontSize(9);
+            doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, marginX, 287);
+            doc.save(`contrato-${activeEventId}.pdf`);
         }
 
         function fillSelect() {
