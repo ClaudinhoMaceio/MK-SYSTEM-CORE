@@ -15,8 +15,9 @@
     <link rel="apple-touch-icon" href="https://img.icons8.com/fluent/180/000000/video-trimming.png">
     <link rel="icon" type="image/png" href="https://img.icons8.com/fluent/48/000000/video-trimming.png">
 
-    <!-- MANIFESTO PWA (Inline para manter arquivo único) -->
-    <link rel="manifest" href='data:application/manifest+json,{"name":"MK Audiovisual Gestão","short_name":"MK Gestão","start_url":".","display":"standalone","background_color":"#050505","theme_color":"#c5a02e","icons":[{"src":"https://img.icons8.com/fluent/192/000000/video-trimming.png","sizes":"192x192","type":"image/png"},{"src":"https://img.icons8.com/fluent/512/000000/video-trimming.png","sizes":"512x512","type":"image/png"}]}'>
+    <link rel="manifest" href="./manifest.json">
+    <meta name="description" content="Gestão de eventos, agenda e financeiro MK Audiovisual">
+    <meta name="mobile-web-app-capable" content="yes">
 
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700&family=Rajdhani:wght@300;500;700&display=swap" rel="stylesheet">
@@ -426,7 +427,9 @@
         // REGISTRO DE SERVICE WORKER PARA PWA
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('./sw.js').catch(err => console.log('SW Error:', err));
+                navigator.serviceWorker.register('./sw.js', { scope: './', updateViaCache: 'none' })
+                    .then((reg) => console.log('PWA: Service Worker ativo em', reg.scope))
+                    .catch((err) => console.warn('PWA: falha no Service Worker', err));
             });
         }
 
