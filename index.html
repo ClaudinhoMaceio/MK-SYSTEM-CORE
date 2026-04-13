@@ -309,10 +309,11 @@
 
                     <!-- GESTÃO DE DÍVIDAS -->
                     <div class="glass p-8 rounded-3xl relative overflow-hidden">
-                        <div id="debt-loading" class="absolute inset-0 bg-black/60 hidden items-center justify-center z-20">
+                        <div id="debt-loading" class="absolute inset-0 bg-black/60 z-20 hidden flex items-center justify-center">
                             <span class="text-[#c5a02e] text-[10px] font-bold animate-pulse">ATUALIZANDO DRIVE...</span>
                         </div>
                         <h3 class="futuristic-font text-lg mb-6 text-red-500 italic">CONTROLE DE CUSTOS</h3>
+                        <p id="debt-feedback" class="text-[11px] text-gray-500 min-h-[1.25rem]"></p>
                         <div class="space-y-4">
                             <div class="space-y-2">
                                 <div class="flex gap-2">
@@ -325,7 +326,7 @@
                                 </div>
                                 <div class="flex gap-2">
                                     <input type="number" id="debt-v" placeholder="Valor Total R$" class="flex-1 bg-black/40 border border-gray-800 p-3 rounded-lg text-xs text-white focus:border-red-500 outline-none">
-                                    <button onclick="saveDebt()" class="bg-red-600 px-6 rounded-lg font-bold text-white hover:scale-105 active:scale-95 transition-all">+</button>
+                                    <button type="button" onclick="saveDebt()" class="bg-red-600 px-6 rounded-lg font-bold text-white hover:scale-105 active:scale-95 transition-all">+</button>
                                 </div>
                             </div>
                             <div id="list-debts" class="space-y-2 max-h-[250px] overflow-y-auto pr-2"></div>
@@ -467,6 +468,8 @@
                 
                 if (result.success && result.data) {
                     db_raw_data = result.data;
+                    if (!Array.isArray(db_raw_data.contratos)) db_raw_data.contratos = [];
+                    if (!Array.isArray(db_raw_data.dividas)) db_raw_data.dividas = [];
                     db_debts = (db_raw_data.dividas || []).map(normalizeDebtRecord).filter(Boolean);
                     db_events = (db_raw_data.contratos || []).map(c => ({
                         id: c.id_evento,
@@ -506,10 +509,17 @@
                         data: db_raw_data
                     })
                 });
-                return await response.json();
+                const text = await response.text();
+                try {
+                    const parsed = JSON.parse(text);
+                    if (parsed && typeof parsed.success === 'boolean') return parsed;
+                    return { success: response.ok, data: parsed };
+                } catch {
+                    return { success: false, message: text ? text.slice(0, 240) : 'Resposta inválida do servidor' };
+                }
             } catch (err) {
                 console.error("Erro no salvamento:", err);
-                return { success: false };
+                return { success: false, error: err.message || String(err) };
             }
         }
 
@@ -577,14 +587,32 @@
             }
         }
 
+        function setDebtFeedback(msg, isError) {
+            const el = document.getElementById('debt-feedback');
+            if (!el) return;
+            el.innerText = msg || '';
+            el.className = `text-[11px] min-h-[1.25rem] ${isError ? 'text-red-400' : 'text-green-400'}`;
+        }
+
+        function showDebtLoading(show) {
+            const el = document.getElementById('debt-loading');
+            if (!el) return;
+            if (show) el.classList.remove('hidden');
+            else el.classList.add('hidden');
+        }
+
         async function saveDebt() {
             const name = document.getElementById('debt-n').value.trim();
-            const val = parseFloat(document.getElementById('debt-v').value);
+            const val = parseMoney(document.getElementById('debt-v').value);
             const type = document.getElementById('debt-type').value;
+            setDebtFeedback('', false);
 
-            if (!name || isNaN(val)) return;
+            if (!name || val <= 0) {
+                setDebtFeedback('Preencha a descrição e um valor maior que zero (use ponto ou vírgula).', true);
+                return;
+            }
 
-            document.getElementById('debt-loading').style.display = 'flex';
+            showDebtLoading(true);
             
             if (!db_raw_data.dividas) db_raw_data.dividas = [];
             
@@ -601,31 +629,52 @@
             if (res.success) {
                 document.getElementById('debt-n').value = '';
                 document.getElementById('debt-v').value = '';
+                setDebtFeedback('Dívida salva com sucesso no Drive.', false);
                 fetchData();
+            } else {
+                db_raw_data.dividas.pop();
+                const msg = res.error || res.message || 'Falha ao salvar. Verifique conexão e permissões do script.';
+                setDebtFeedback(msg, true);
+                alert('Não foi possível salvar a dívida: ' + msg);
             }
-            document.getElementById('debt-loading').style.display = 'none';
+            showDebtLoading(false);
         }
 
         async function deleteDebt(id) {
             if (!confirm("Remover dívida?")) return;
-            document.getElementById('debt-loading').style.display = 'flex';
-            db_raw_data.dividas = db_raw_data.dividas.filter(d => d.id !== id);
-            await syncFullToDrive();
-            fetchData();
-            document.getElementById('debt-loading').style.display = 'none';
+            showDebtLoading(true);
+            setDebtFeedback('', false);
+            db_raw_data.dividas = (db_raw_data.dividas || []).filter(d => String(d.id) !== String(id));
+            const res = await syncFullToDrive();
+            if (res.success) {
+                setDebtFeedback('Dívida removida.', false);
+                fetchData();
+            } else {
+                setDebtFeedback('Erro ao remover. Sincronize e tente de novo.', true);
+                alert('Erro ao remover dívida. Recarregue a página.');
+                fetchData();
+            }
+            showDebtLoading(false);
         }
 
         async function settleDebt(id) {
             if (!confirm("Marcar dívida como quitada?")) return;
-            document.getElementById('debt-loading').style.display = 'flex';
+            showDebtLoading(true);
+            setDebtFeedback('', false);
             const target = (db_raw_data.dividas || []).find(d => String(d.id) === String(id));
             if (target) {
                 target.ativa = false;
                 target.data_quitacao = new Date().toLocaleDateString('pt-BR');
             }
-            await syncFullToDrive();
-            fetchData();
-            document.getElementById('debt-loading').style.display = 'none';
+            const res = await syncFullToDrive();
+            if (res.success) {
+                setDebtFeedback('Dívida marcada como quitada.', false);
+                fetchData();
+            } else {
+                setDebtFeedback('Erro ao quitar. Tente novamente.', true);
+                fetchData();
+            }
+            showDebtLoading(false);
         }
 
         // LÓGICA DE INTERFACE (UI)
@@ -705,8 +754,8 @@
                     </div>
                     <div class="text-right flex items-center gap-3">
                         <span class="text-red-400 font-bold">R$ ${d.valor.toLocaleString('pt-BR')}</span>
-                        <button onclick="settleDebt(${d.id})" class="text-blue-400 hover:text-blue-300 text-[10px] uppercase">Quitar</button>
-                        <button onclick="deleteDebt(${d.id})" class="text-gray-600 hover:text-red-500">✕</button>
+                        <button type="button" onclick="settleDebt(${JSON.stringify(d.id)})" class="text-blue-400 hover:text-blue-300 text-[10px] uppercase">Quitar</button>
+                        <button type="button" onclick="deleteDebt(${JSON.stringify(d.id)})" class="text-gray-600 hover:text-red-500">✕</button>
                     </div>
                 `;
                 container.appendChild(item);
