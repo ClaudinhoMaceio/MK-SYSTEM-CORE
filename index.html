@@ -1470,6 +1470,28 @@
             return `R$ ${parseMoney(value).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
         }
 
+        function pdfContractCityOnly(cidade) {
+            if (!cidade || typeof cidade !== 'string') return '';
+            const first = cidade.split('/')[0].trim();
+            return first || cidade.trim();
+        }
+
+        function pdfContractIssueDate(contract) {
+            const raw = contract.data_emissao || '';
+            if (typeof raw === 'string' && raw.includes(',')) return raw.split(',')[0].trim();
+            if (typeof raw === 'string' && /^\d{2}\/\d{2}\/\d{4}/.test(raw)) return raw.slice(0, 10);
+            return new Date().toLocaleDateString('pt-BR');
+        }
+
+        function pdfEnsureSpace(doc, y, needMm) {
+            const maxY = 275;
+            if (y + needMm > maxY) {
+                doc.addPage();
+                return 22;
+            }
+            return y;
+        }
+
         function createContractPdf(contract, event) {
             const jsPdfRef = window.jspdf?.jsPDF;
             if (!jsPdfRef) {
@@ -1479,63 +1501,114 @@
 
             const doc = new jsPdfRef({ unit: 'mm', format: 'a4' });
             const pageWidth = doc.internal.pageSize.getWidth();
-            const marginX = 15;
-            let y = 18;
+            const marginX = 18;
+            const textW = pageWidth - marginX * 2;
+            let y = 16;
+
+            const contratanteNome = (contract.cliente?.nome || '').toUpperCase();
+            const contratanteDoc = contract.cliente?.doc || '';
+            const dataEvento = event?.data_original || contract.logistica?.data || '';
+            const endereco = contract.logistica?.endereco || '';
+            const cidade = contract.logistica?.cidade || '';
+            const localLinha = [endereco, cidade].filter(Boolean).join(' - ');
+            const valorLinha = formatMoneyBRL(
+                event?.valor ?? contract.valor ?? contract.logistica?.valor_evento_numero ?? contract.logistica?.valor_evento
+            );
+            const cidadeRodape = pdfContractCityOnly(cidade);
+            const dataEmissaoCurta = pdfContractIssueDate(contract);
 
             doc.setFont('helvetica', 'bold');
-            doc.setFontSize(16);
-            doc.text('CONTRATO - MK AUDIOVISUAL', pageWidth / 2, y, { align: 'center' });
-            y += 10;
+            doc.setFontSize(13);
+            doc.text('MK AUDIOVISUAL - CONTRATO DIGITAL', marginX, y);
+            y += 6;
 
+            doc.setLineWidth(0.35);
+            doc.line(marginX, y, pageWidth - marginX, y);
+            y += 8;
+
+            doc.setFontSize(10);
+            doc.text(`CONTRATANTE: ${contratanteNome} | DOC: ${contratanteDoc}`, marginX, y);
+            y += 6;
+
+            doc.text('CONTRATADA: MK AUDIOVISUAL - Mikael Lucas Soares da Silva', marginX, y);
+            y += 8;
+
+            doc.setFont('helvetica', 'bold');
+            doc.text('OBJETO E SERVIÇOS SELECIONADOS:', marginX, y);
+            y += 6;
             doc.setFont('helvetica', 'normal');
-            doc.setFontSize(11);
-            const lines = [
-                `ID do Evento: ${contract.id_evento || ''}`,
-                `Data de Emissao: ${contract.data_emissao || ''}`,
-                `Cliente: ${contract.cliente?.nome || ''}`,
-                `Documento: ${contract.cliente?.doc || ''}`,
-                `Telefone: ${contract.cliente?.fone || ''}`,
-                `Data do Evento: ${event?.data_original || contract.logistica?.data || ''}`,
-                `Hora do Evento: ${event?.hora || contract.logistica?.hora || ''}`,
-                `Endereco: ${contract.logistica?.endereco || ''}`,
-                `Cidade: ${contract.logistica?.cidade || ''}`,
-                `Valor do Contrato: ${formatMoneyBRL(event?.valor ?? contract.valor ?? contract.logistica?.valor_evento_numero ?? contract.logistica?.valor_evento)}`,
-                `Status: ${contract.status || ''}`
-            ];
 
-            lines.forEach(line => {
-                doc.text(String(line), marginX, y);
-                y += 7;
+            const servicos = Array.isArray(contract.servicos) && contract.servicos.length
+                ? contract.servicos
+                : ['(Serviço não informado no cadastro)'];
+            servicos.forEach((s) => {
+                const linha = doc.splitTextToSize(`- ${s}`, textW);
+                y = pdfEnsureSpace(doc, y, linha.length * 5 + 2);
+                doc.text(linha, marginX, y);
+                y += linha.length * 5 + 1;
             });
 
-            if (Array.isArray(contract.servicos) && contract.servicos.length) {
-                y += 2;
-                doc.setFont('helvetica', 'bold');
-                doc.text('Servicos contratados:', marginX, y);
-                y += 7;
-                doc.setFont('helvetica', 'normal');
-                contract.servicos.forEach(service => {
-                    const wrapped = doc.splitTextToSize(`- ${service}`, pageWidth - (marginX * 2));
-                    doc.text(wrapped, marginX, y);
-                    y += wrapped.length * 6;
-                });
-            }
+            y += 4;
+            doc.setFont('helvetica', 'bold');
+            doc.text('DATA E LOCAL DO EVENTO:', marginX, y);
+            y += 6;
+            doc.setFont('helvetica', 'normal');
+            doc.text(`Data: ${dataEvento}`, marginX, y);
+            y += 6;
+            const localWrapped = doc.splitTextToSize(`Local: ${localLinha || 'Não informado'}`, textW);
+            y = pdfEnsureSpace(doc, y, localWrapped.length * 5 + 2);
+            doc.text(localWrapped, marginX, y);
+            y += localWrapped.length * 5 + 2;
+
+            doc.setFont('helvetica', 'bold');
+            doc.text('VALOR DO EVENTO:', marginX, y);
+            y += 6;
+            doc.setFont('helvetica', 'normal');
+            doc.text(valorLinha, marginX, y);
+            y += 8;
+
+            doc.setFont('helvetica', 'bold');
+            doc.text('CLÁUSULA DE CANCELAMENTO E SINAL:', marginX, y);
+            y += 6;
+            doc.setFont('helvetica', 'normal');
+            const clausula1 = 'O valor pago a título de sinal (reserva de data) não será reembolsável em caso de cancelamento por parte do contratante, servindo para cobrir a reserva da agenda e custos administrativos da contratada.';
+            const clausula2 = 'O contratante compromete-se a fornecer rede elétrica estável (220v) e conexão de internet estável e local protegido de intempéries.';
+            const w1 = doc.splitTextToSize(clausula1, textW);
+            y = pdfEnsureSpace(doc, y, w1.length * 5 + 2);
+            doc.text(w1, marginX, y);
+            y += w1.length * 5 + 3;
+            const w2 = doc.splitTextToSize(clausula2, textW);
+            y = pdfEnsureSpace(doc, y, w2.length * 5 + 2);
+            doc.text(w2, marginX, y);
+            y += w2.length * 5 + 8;
+
+            const localDataLinha = `${cidadeRodape || '____________'}, ${dataEmissaoCurta}`;
+            doc.text(localDataLinha, marginX, y);
+            y += 10;
+
+            doc.text('________________________________', marginX, y);
+            y += 6;
+            doc.text('Assinatura do Cliente', marginX, y);
+            y += 8;
 
             if (typeof contract.assinatura === 'string' && contract.assinatura.startsWith('data:image/')) {
-                y += 4;
-                if (y > 210) {
-                    doc.addPage();
-                    y = 20;
+                y = pdfEnsureSpace(doc, y, 38);
+                try {
+                    doc.addImage(contract.assinatura, 'JPEG', marginX, y, 75, 28);
+                    y += 32;
+                } catch (e) {
+                    doc.setFontSize(9);
+                    doc.text('(assinatura digital anexa ao cadastro)', marginX, y);
+                    y += 8;
+                    doc.setFontSize(10);
                 }
-                doc.setFont('helvetica', 'bold');
-                doc.text('Assinatura:', marginX, y);
-                y += 4;
-                doc.addImage(contract.assinatura, 'JPEG', marginX, y, 70, 30);
-                y += 34;
             }
 
-            doc.setFontSize(9);
-            doc.text(`Gerado em: ${new Date().toLocaleString('pt-BR')}`, marginX, 287);
+            y += 6;
+            doc.text('________________________________', marginX, y);
+            y += 6;
+            doc.text('Mikael Lucas Soares da Silva', marginX, y);
+
             doc.save(`contrato-${activeEventId}.pdf`);
         }
 
